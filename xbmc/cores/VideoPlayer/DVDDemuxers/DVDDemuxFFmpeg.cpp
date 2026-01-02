@@ -412,16 +412,23 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool 
         // the advancedsetting is for allowing the user to force outputting the
         // 44.1 kHz DTS wav file as PCM, so that an A/V receiver can decode
         // it (this is temporary until we handle 44.1 kHz passthrough properly)
-        if (trySPDIFonly || (iformat && strcmp(iformat->name, "wav") == 0 && !CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_VideoPlayerIgnoreDTSinWAV))
+       if (trySPDIFonly ||
+          (iformat && strcmp(iformat->name, "wav") == 0 &&
+           !CServiceBroker::GetSettingsComponent()->GetAdvancedSettings()->m_VideoPlayerIgnoreDTSinWAV))
+      {
+        // check for spdif and dts
+        // This is used with wav files and audio CDs that may contain
+        // a DTS or AC3 track padded for S/PDIF playback. If neither of those
+        // is present, we assume it is PCM audio.
+        // AC3 is always wrapped in iec61937 (ffmpeg "spdif"), while DTS
+        // may be just padded.
+      
+        const AVInputFormat* iformat2 = av_find_input_format("spdif");
+        if (iformat2)
         {
-          // check for spdif and dts
-          // This is used with wav files and audio CDs that may contain
-          // a DTS or AC3 track padded for S/PDIF playback. If neither of those
-          // is present, we assume it is PCM audio.
-          // AC3 is always wrapped in iec61937 (ffmpeg "spdif"), while DTS
-          // may be just padded.
-          const AVInputFormat* iformat2 = av_find_input_format("spdif");
-          if (iformat2 && iformat2->read_probe(&pd) > AVPROBE_SCORE_MAX / 4)
+          int score = 0;
+          const AVInputFormat* detected = av_probe_input_format2(&pd, 1, &score);
+          if (detected == iformat2 && score > AVPROBE_SCORE_MAX / 4)
           {
             iformat = iformat2;
           }
@@ -429,19 +436,33 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool 
           {
             // not spdif or no spdif demuxer, try dts
             iformat2 = av_find_input_format("dts");
-
-            if (iformat2 && iformat2->read_probe(&pd) > AVPROBE_SCORE_MAX / 4)
+            if (iformat2)
             {
-              iformat = iformat2;
+              score = 0;
+              detected = av_probe_input_format2(&pd, 1, &score);
+              if (detected == iformat2 && score > AVPROBE_SCORE_MAX / 4)
+              {
+                iformat = iformat2;
+                    }
+              else if (trySPDIFonly)
+              {
+                // not dts either, return false in case we were explicitly
+                // requested to only check for S/PDIF padded compressed audio
+                CLog::Log(LOGDEBUG, "{} - not spdif or dts file, falling back", __FUNCTION__);
+                return false;
+              }
             }
             else if (trySPDIFonly)
             {
-              // not dts either, return false in case we were explicitly
-              // requested to only check for S/PDIF padded compressed audio
-              CLog::Log(LOGDEBUG, "{} - not spdif or dts file, falling back", __FUNCTION__);
+              CLog::Log(LOGDEBUG, "{} - spdif and dts demuxers unavailable", __FUNCTION__);
               return false;
             }
           }
+        }
+        else if (trySPDIFonly)
+        {
+          CLog::Log(LOGDEBUG, "{} - spdif demuxer unavailable", __FUNCTION__);
+          return false;
         }
       }
 
@@ -1353,7 +1374,7 @@ bool CDVDDemuxFFmpeg::SeekTime(double time, bool backwards, double* startpts)
 
     if (ret >= 0)
     {
-      if (m_pFormatContext->iformat->read_seek)
+      if (m_pFormatContext->iformat->flags & AVFMT_SEEK_TO_PTS)
         m_seekToKeyFrame = true;
       m_currentPts = DVD_NOPTS_VALUE;
     }
