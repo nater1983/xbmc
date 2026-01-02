@@ -421,19 +421,29 @@ bool CDVDDemuxFFmpeg::Open(const std::shared_ptr<CDVDInputStream>& pInput, bool 
           // AC3 is always wrapped in iec61937 (ffmpeg "spdif"), while DTS
           // may be just padded.
           const AVInputFormat* iformat2 = av_find_input_format("spdif");
-          if (iformat2 && iformat2->read_probe(&pd) > AVPROBE_SCORE_MAX / 4)
+          if (iformat2)
           {
-            iformat = iformat2;
+            AVInputFormat* detected = nullptr;
+            av_probe_input_format2(&pd, 1, &detected);
+            if (detected == iformat2)
+            {
+              iformat = iformat2;
+            }
           }
           else
           {
             // not spdif or no spdif demuxer, try dts
             iformat2 = av_find_input_format("dts");
 
-            if (iformat2 && iformat2->read_probe(&pd) > AVPROBE_SCORE_MAX / 4)
+          if (iformat2)
+          {
+            AVInputFormat* detected = nullptr;
+            av_probe_input_format2(&pd, 1, &detected);
+            if (detected == iformat2)
             {
               iformat = iformat2;
             }
+          }
             else if (trySPDIFonly)
             {
               // not dts either, return false in case we were explicitly
@@ -1353,7 +1363,7 @@ bool CDVDDemuxFFmpeg::SeekTime(double time, bool backwards, double* startpts)
 
     if (ret >= 0)
     {
-      if (m_pFormatContext->iformat->read_seek)
+    if (m_pFormatContext->iformat->flags & AVFMT_SEEK_TO_PTS)
         m_seekToKeyFrame = true;
       m_currentPts = DVD_NOPTS_VALUE;
     }
